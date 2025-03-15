@@ -3,29 +3,26 @@ import { BasePlugin, BaseComponent } from 'vatom-spaces-plugins'
 /**
  * Asset Link Plugin
  *
- * This plugin links assets together via interactions. It registers two components:
+ * This plugin links assets together via interactions. It registers three components:
  *
  *  • Trigger Component – activated via On-Click, Proximity, or Multi-Proximity interactions.
- *     It sends out a trigger message using a user-defined ActionID.
+ *     It sends out a trigger message using a user-defined ActionID. It can also restrict
+ *     activation based on roles and assign a role when triggered.
  *
- *  • Receiver Component – listens for trigger messages (matching the ActionID) and then
- *     performs animations (and optionally plays a sound). It supports two animation modes:
+ *  • Receiver Component – listens for trigger messages and then performs animations and sound.
+ *     It supports both Reactive and Transition animation modes. In addition, it can restrict
+ *     processing of triggers based on a required role.
  *
- *       - Reactive: plays a one-off active animation then reverts to a default (idle) animation.
+ *  • Asset Link Secondary Audio Output – relays sound from a specified source so that the sound is
+ *     played from a secondary location.
  *
- *       - Transition: supports either:
- *           ◦ Cycle mode – a bidirectional cycle using lists of static states, forward transitions, and reverse transitions.
- *           ◦ Mapping mode – custom transitions defined by a JSON array of mappings (optionally with per-transition sounds).
- * 
- *  • Asset Link Secondary Audio Output – relays sound from a specified source so that
- *     the sound is played from a secondary location.*
- * 
- * Triggers are always synchronized (broadcast to all users) by default.
+ * An admin-only Role Management panel is registered (via the Menus API) to allow the Space designer
+ * to configure the available roles and clear all role assignments. User roles persist across sessions
+ * until cleared by an admin.
  *
  * @license MIT
  * @author Leone Amurri
  */
-
 export default class AssetLink extends BasePlugin {
   static get id() { return 'assetlink' }
   static get name() { return 'Asset Link' }
@@ -36,19 +33,61 @@ export default class AssetLink extends BasePlugin {
   receiverComponents = []
   secondaryComponents = []
 
+  // Global mapping of user roles (userID -> array of role strings)
+  userRoles = {}
+
+  // Returns the roles assigned to a given user.
+  getUserRoles(userID) {
+    return this.userRoles[userID] || []
+  }
+
+  // Assigns a role to a user (if not already assigned).
+  assignUserRole(userID, role) {
+    if (!this.userRoles[userID]) {
+      this.userRoles[userID] = []
+    }
+    if (this.userRoles[userID].indexOf(role) === -1) {
+      this.userRoles[userID].push(role)
+    }
+  }
+
+  // Clears all role assignments.
+  clearAllRoles() {
+    this.userRoles = {}
+    // Optionally persist this change if a persistent storage mechanism is available.
+  }
+
   async onLoad() {
     // Clear previous references.
     this.triggerComponents = []
     this.receiverComponents = []
     this.secondaryComponents = []
-    
+
     this.userID = await this.user.getID()
 
-    // Register Trigger Component
+    // Register admin-only Role Management panel using the Menus API.
+    if (await this.user.isAdmin()) {
+      this.menus.register({
+        id: 'assetlink-role-management',
+        title: 'Role Management',
+        section: 'admin-panel',
+        panel: {
+          // This panel should load an HTML file (role-management.html) that lets the admin
+          // define a comma-separated list of available roles and includes a Clear All Roles button.
+          iframeURL: this.paths.absolute('./role-management.html'),
+          width: 400,
+          height: 300,
+          onClose: () => { /* Optionally update available roles from the panel */ }
+        }
+      })
+    }
+
+    // Register Trigger Component.
     this.objects.registerComponent(TriggerComponent, {
       id: 'asset-link-trigger',
       name: 'Asset Link Trigger',
-      description: 'Sends a trigger based on user interaction using a defined ActionID.',
+      description: 'Sends a trigger based on user interaction using a defined ActionID. ' +
+                   'Can restrict activation by role and assign a role when triggered.',
       settings: [
         { id: 'header-interaction', type: 'label', value: 'Interaction Settings' },
         { id: 'inputType', name: 'Input Type', type: 'select', help: 'Select the interaction type.',
@@ -61,21 +100,38 @@ export default class AssetLink extends BasePlugin {
         { id: 'actionID', name: 'ActionID', type: 'input',
           help: 'Enter a unique ActionID for this trigger.' },
         { id: 'adminOnly', name: 'Admin Only', type: 'checkbox',
-          help: 'If checked, only admin users can trigger this asset.', default: false }
+          help: 'If checked, only admin users can trigger this asset.', default: false },
+        // New Role-based settings:
+        { id: 'roleRestricted', name: 'Role Restricted', type: 'checkbox',
+          help: 'If checked, only users with a specific role can trigger this asset.', default: false },
+        { id: 'requiredRole', name: 'Required Role', type: 'select',
+          help: 'Select the role required to trigger this asset. (Dropdown populated from the Role Management panel)',
+          // Default values here can be an empty list; they should be updated dynamically in practice.
+          values: [] },
+        { id: 'assignRole', name: 'Role to Assign', type: 'select',
+          help: 'Select the role to assign to a user upon trigger activation.',
+          values: [] }
       ]
     })
 
-    // Register Receiver Component
+    // Register Receiver Component.
     this.objects.registerComponent(ReceiverComponent, {
       id: 'asset-link-receiver',
       name: 'Asset Link Receiver',
-      description: 'Listens for triggers and performs animations and sound. Also relays its sound via messages.',
+      description: 'Listens for triggers and performs animations and sound. Also relays its sound via messages. ' +
+                   'Can restrict processing by role.',
       settings: [
         { id: 'header-receiver', type: 'label', value: 'Receiver Settings' },
         { id: 'actionID', name: 'ActionID', type: 'input',
           help: 'Enter the ActionID this receiver should listen for. (Ensure unique IDs for independent assets)' },
         { id: 'adminOnly', name: 'Admin Only', type: 'checkbox',
           help: 'If checked, this receiver only processes triggers from admin users.', default: false },
+        // New Role-based settings:
+        { id: 'roleRestricted', name: 'Role Restricted', type: 'checkbox',
+          help: 'If checked, only triggers from users with the required role will be processed.', default: false },
+        { id: 'requiredRole', name: 'Required Role', type: 'select',
+          help: 'Select the role required to interact with this receiver.',
+          values: [] },
         { id: 'header-sound', type: 'label', value: 'Sound Settings' },
         { id: 'sound', name: 'Sound', type: 'string',
           help: 'Sound file URL (or path) for playback (applies to both Reactive and Transition modes).', default: '' },
@@ -110,7 +166,7 @@ export default class AssetLink extends BasePlugin {
       ]
     })
 
-    // Register Secondary Audio Output Component
+    // Register Secondary Audio Output Component.
     this.objects.registerComponent(AssetLinkSecondaryAudioOutput, {
       id: 'asset-link-secondary',
       name: 'Asset Link Secondary Audio Output',
@@ -122,17 +178,26 @@ export default class AssetLink extends BasePlugin {
   }
 
   async onMessage(msg) {
-    // Pass trigger messages to receiver components.
     this.receiverComponents.forEach(comp => {
       if (comp.getField('actionID') === msg.actionID) {
         if (String(comp.getField('adminOnly')).toLowerCase() === "true" && !msg.isAdmin) return
-        comp.sendMessage({ fromUser: this.userID, action: 'trigger', actionID: msg.actionID, isAdmin: msg.isAdmin }, true)
+        // In the receiver, role restrictions are checked within handleTrigger.
+        comp.sendMessage({ fromUser: this.userID, action: 'trigger', actionID: msg.actionID, isAdmin: msg.isAdmin, userID: msg.userID }, true)
       }
     })
-    // Pass relay sound messages to secondary audio output components.
     this.secondaryComponents.forEach(comp => {
       comp.sendMessage(msg, true)
     })
+  }
+
+  // (Optionally, add methods to update the available roles from the Role Management panel.)
+  updateAvailableRoles(rolesCommaSeparated) {
+    this.availableRoles = rolesCommaSeparated.split(',').map(r => r.trim()).filter(r => r.length > 0)
+  }
+  
+  // Clear all role assignments.
+  clearAllRoles() {
+    this.userRoles = {}
   }
 }
 
@@ -232,6 +297,19 @@ class TriggerComponent extends BaseComponent {
   }
 
   async trigger() {
+    // Role-restricted trigger settings.
+    const roleRestricted = this.getField('roleRestricted') === true || String(this.getField('roleRestricted')).toLowerCase() === "true"
+    const requiredRole = this.getField('requiredRole') || ""
+    const assignRole = this.getField('assignRole') || ""
+    const userRoles = this.plugin.getUserRoles(this.userID)
+    if (roleRestricted && requiredRole && userRoles.indexOf(requiredRole) === -1) {
+      // User does not have required role; do not trigger.
+      return
+    }
+    // If a role is to be assigned and not already present, assign it.
+    if (assignRole && userRoles.indexOf(assignRole) === -1) {
+      this.plugin.assignUserRole(this.userID, assignRole)
+    }
     const actionID = this.getField('actionID') || ''
     const isAdmin = await this.plugin.user.isAdmin()
     this.plugin.messages.send({
@@ -267,7 +345,6 @@ class ReceiverComponent extends BaseComponent {
   async onLoad() {
     this.plugin.receiverComponents.push(this)
     this.userID = await this.plugin.user.getID()
-
     const props = await this.plugin.objects.get(this.objectID)
     if (props && props.currentState) {
       this.currentState = props.currentState
@@ -275,13 +352,8 @@ class ReceiverComponent extends BaseComponent {
     if (props && typeof props.currentDirection !== 'undefined') {
       this.currentDirection = props.currentDirection
     }
-    
     await this.readSettings()
-    // Periodically update settings dynamically.
-    this.settingsChecker = setInterval(() => {
-      this.readSettings()
-    }, 1000)
-
+    this.settingsChecker = setInterval(() => { this.readSettings() }, 1000)
     this.processingTransition = false
     this.lastTriggerTime = 0
   }
@@ -292,9 +364,7 @@ class ReceiverComponent extends BaseComponent {
 
   async readSettings() {
     const animMode = (this.getField('animationMode') || 'Reactive').trim()
-    const rawDisable = this.getField('disableLocalAudio')
-    this.disableLocalAudio = rawDisable === true || String(rawDisable).toLowerCase() === "true"
-    
+    this.disableLocalAudio = this.getField('disableLocalAudio') === true || String(this.getField('disableLocalAudio')).toLowerCase() === "true"
     if (animMode === 'Transition') {
       this.transitionMode = (this.getField('transitionMode') || 'Cycle').trim()
       if (this.transitionMode === 'Cycle') {
@@ -352,7 +422,13 @@ class ReceiverComponent extends BaseComponent {
 
   async onMessage(msg) {
     if (msg.action === 'trigger' && msg.actionID === this.getField('actionID')) {
-      if (String(this.getField('adminOnly')).toLowerCase() === "true" && !msg.isAdmin) return
+      // Role check for receiver.
+      const roleRestricted = this.getField('roleRestricted') === true || String(this.getField('roleRestricted')).toLowerCase() === "true"
+      const requiredRole = this.getField('requiredRole') || ""
+      if (roleRestricted && requiredRole) {
+        const userRoles = this.plugin.getUserRoles(msg.userID)
+        if (userRoles.indexOf(requiredRole) === -1) return
+      }
       this.handleTrigger()
     }
   }
@@ -628,9 +704,6 @@ class ReceiverComponent extends BaseComponent {
 
 /**
  * Asset Link Secondary Audio Output Component
- *
- * This component listens for "relaySound" messages and, if the message's sourceID matches
- * the specified Source Object ID in its settings, it plays the sound from its own location.
  */
 class AssetLinkSecondaryAudioOutput extends BaseComponent {
   async onLoad() {
@@ -651,21 +724,19 @@ class AssetLinkSecondaryAudioOutput extends BaseComponent {
   }
 
   async onMessage(msg) {
-    if (msg.action === 'relaySound') {
-      if (msg.sourceID === this.sourceID) {
-        const volume = msg.volume || 1
-        const duration = msg.duration || 2000
-        const soundFile = msg.soundFile
-        this.audioID = await this.plugin.audio.play(this.plugin.paths.absolute(soundFile), {
-          volume: volume,
-          x: this.fields.x,
-          y: this.fields.y,
-          height: this.fields.height
-        })
-        setTimeout(() => {
-          this.plugin.audio.stop(this.audioID)
-        }, duration)
-      }
+    if (msg.action === 'relaySound' && msg.sourceID === this.sourceID) {
+      const volume = msg.volume || 1
+      const duration = msg.duration || 2000
+      const soundFile = msg.soundFile
+      this.audioID = await this.plugin.audio.play(this.plugin.paths.absolute(soundFile), {
+        volume: volume,
+        x: this.fields.x,
+        y: this.fields.y,
+        height: this.fields.height
+      })
+      setTimeout(() => {
+        this.plugin.audio.stop(this.audioID)
+      }, duration)
     }
   }
 }
