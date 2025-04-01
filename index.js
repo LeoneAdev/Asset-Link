@@ -49,11 +49,13 @@ export default class AssetLink extends BasePlugin {
     }
     if (this.userRoles[userID].indexOf(role) === -1) {
       this.userRoles[userID].push(role);
+      console.log(`Assigned role "${role}" to user ${userID}. Current roles:`, this.userRoles[userID]);
     }
   }
 
   clearAllRoles() {
     this.userRoles = {};
+    console.log("Cleared all user roles.");
   }
 
   isValidRole(role) {
@@ -70,18 +72,29 @@ export default class AssetLink extends BasePlugin {
   }
 
   async onLoad() {
+    // Clear internal arrays.
     this.triggerComponents = [];
     this.receiverComponents = [];
     this.secondaryComponents = [];
-    
+
+    // Load available roles from localStorage, if present.
+    if (typeof localStorage !== 'undefined') {
+      const stored = localStorage.getItem('assetlink-roles');
+      if (stored) {
+        this.availableRoles = stored;
+        console.log("Loaded availableRoles from localStorage:", this.availableRoles);
+      }
+    }
+
     this.userID = await this.user.getID();
+    console.log("AssetLink onLoad: userID =", this.userID);
 
     // Register admin-only Role Management panel.
     if (await this.user.isAdmin()) {
       this.menus.register({
         id: 'assetlink-role-management',
-        title: 'Role Management',  // Side panel header.
-        text: 'Roles',             // Toolbar button label.
+        title: 'Role Management',
+        text: 'Roles',
         icon: this.paths.absolute('role-icon.png'),
         section: 'admin-panel',
         panel: {
@@ -93,14 +106,20 @@ export default class AssetLink extends BasePlugin {
               type: 'textarea',
               initialValue: this.availableRoles,
               placeholder: 'e.g., level01, level02, admin',
-              onChange: (value) => { this.availableRoles = value; }
+              onChange: (value) => {
+                this.availableRoles = value;
+                console.log("Roles updated in admin panel:", this.availableRoles);
+              }
             },
             {
               id: 'saveRoles',
               name: 'Save Roles',
               type: 'button',
               onClick: () => {
-                localStorage.setItem('assetlink-roles', this.availableRoles);
+                if (typeof localStorage !== 'undefined') {
+                  localStorage.setItem('assetlink-roles', this.availableRoles);
+                  console.log("Saved roles to localStorage:", this.availableRoles);
+                }
                 this.hooks.trigger('assetlink.rolecall', this.availableRoles);
                 this.triggerComponents.forEach(comp => {
                   if (typeof comp.onSettingsUpdated === 'function') comp.onSettingsUpdated();
@@ -117,7 +136,10 @@ export default class AssetLink extends BasePlugin {
               onClick: () => {
                 this.clearAllRoles();
                 this.availableRoles = '';
-                localStorage.removeItem('assetlink-roles');
+                if (typeof localStorage !== 'undefined') {
+                  localStorage.removeItem('assetlink-roles');
+                  console.log("Removed roles from localStorage.");
+                }
                 this.hooks.trigger('assetlink.rolecall', this.availableRoles);
                 this.triggerComponents.forEach(comp => {
                   if (typeof comp.onSettingsUpdated === 'function') comp.onSettingsUpdated();
@@ -160,15 +182,15 @@ export default class AssetLink extends BasePlugin {
           help: 'Enter a unique ActionID for this trigger.' },
         { id: 'adminOnly', name: 'Admin Only', type: 'checkbox',
           help: 'If checked, only admin users can trigger this asset.', default: false },
-        // Role-based settings.
+        // New Role-based settings.
         { id: 'roleRestricted', name: 'Role Restricted', type: 'checkbox',
           help: 'If checked, only users with a specified role can trigger this asset.', default: false },
         { id: 'requiredRole', name: 'Required Role', type: 'input',
-          help: 'Enter the role required to trigger this asset (must be a valid role).', values: [] },
+          help: 'Enter the role required to trigger this asset (must be a valid role).' },
         { id: 'assignRole', name: 'Role to Assign', type: 'input',
-          help: 'Enter the role to assign to a user upon trigger activation (must be a valid role).', values: [] }
+          help: 'Enter the role to assign to a user upon trigger activation (must be a valid role).' }
       ]
-    })
+    });
 
     // Register Receiver Component.
     this.objects.registerComponent(ReceiverComponent, {
@@ -186,8 +208,7 @@ export default class AssetLink extends BasePlugin {
         { id: 'roleRestricted', name: 'Role Restricted', type: 'checkbox',
           help: 'If checked, only triggers from users with the required role will be processed.', default: false },
         { id: 'requiredRole', name: 'Required Role', type: 'input',
-          help: 'Enter the role required to interact with this receiver (must be a valid role).', values: [] },
-        // Animation Mode moved to Receiver Settings.
+          help: 'Enter the role required to interact with this receiver (must be a valid role).' },
         { id: 'animationMode', name: 'Animation Mode', type: 'select',
           help: 'Reactive: one-off animation; Transition: cycle or mapping transitions.',
           values: ['Reactive', 'Transition'], default: 'Reactive' },
@@ -234,23 +255,39 @@ export default class AssetLink extends BasePlugin {
 
     window.addEventListener('message', (event) => {
       if (event.data && event.data.action === 'updateRoles') {
+        console.log("Received updateRoles event:", event.data.roles);
         this.availableRoles = event.data.roles;
-        localStorage.setItem('assetlink-roles', this.availableRoles);
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem('assetlink-roles', this.availableRoles);
+        }
+        const activeId = document.activeElement ? document.activeElement.id : '';
         this.triggerComponents.forEach(comp => {
-          if (typeof comp.onSettingsUpdated === 'function') comp.onSettingsUpdated();
+          if (activeId !== 'requiredRole' && activeId !== 'assignRole') {
+            if (typeof comp.onSettingsUpdated === 'function') comp.onSettingsUpdated();
+          }
         });
         this.receiverComponents.forEach(comp => {
-          if (typeof comp.onSettingsUpdated === 'function') comp.onSettingsUpdated();
+          if (activeId !== 'requiredRole') {
+            if (typeof comp.onSettingsUpdated === 'function') comp.onSettingsUpdated();
+          }
         });
       }
       if (event.data && event.data.action === 'clearAllRoles') {
+        console.log("Received clearAllRoles event.");
         this.clearAllRoles();
-        localStorage.removeItem('assetlink-roles');
+        if (typeof localStorage !== 'undefined') {
+          localStorage.removeItem('assetlink-roles');
+        }
+        const activeId = document.activeElement ? document.activeElement.id : '';
         this.triggerComponents.forEach(comp => {
-          if (typeof comp.onSettingsUpdated === 'function') comp.onSettingsUpdated();
+          if (activeId !== 'requiredRole' && activeId !== 'assignRole') {
+            if (typeof comp.onSettingsUpdated === 'function') comp.onSettingsUpdated();
+          }
         });
         this.receiverComponents.forEach(comp => {
-          if (typeof comp.onSettingsUpdated === 'function') comp.onSettingsUpdated();
+          if (activeId !== 'requiredRole') {
+            if (typeof comp.onSettingsUpdated === 'function') comp.onSettingsUpdated();
+          }
         });
       }
     });
@@ -290,30 +327,32 @@ class TriggerComponent extends BaseComponent {
   async onLoad() {
     this.plugin.triggerComponents.push(this);
     this.userID = await this.plugin.user.getID();
+    // Set initial state from current settings.
     this.currentInputType = (this.getField('inputType') || "On-Click").trim().toLowerCase();
+    console.log("Trigger onLoad: currentInputType =", this.currentInputType);
     if (this.currentInputType === 'proximity' || this.currentInputType === 'multi-proximity') {
       this.timer = setInterval(this.checkProximity.bind(this), 100);
     }
-    this.inputTypeChecker = setInterval(() => {
-      const newType = (this.getField('inputType') || "On-Click").trim().toLowerCase();
-      if (newType !== this.currentInputType) {
-        this.onSettingsUpdated();
-      }
-    }, 500);
+    // The Vatom framework should call onSettingsUpdated automatically when settings change.
   }
 
   async onSettingsUpdated() {
-    const newInputType = (this.getField('inputType') || "On-Click").trim().toLowerCase()
+    const newInputType = (this.getField('inputType') || "On-Click").trim().toLowerCase();
+    console.log("Trigger onSettingsUpdated: newInputType =", newInputType, 
+                "requiredRole =", this.getField('requiredRole'),
+                "assignRole =", this.getField('assignRole'));
     if (newInputType !== this.currentInputType) {
-      this.currentInputType = newInputType,
+      this.currentInputType = newInputType;
       this.triggered = false;
       if (this.timer) {
-        clearInterval(this.timer),
+        clearInterval(this.timer);
         this.timer = null;
       }
     }
     if (newInputType === 'proximity' || newInputType === 'multi-proximity') {
-      this.timer = setInterval(this.checkProximity.bind(this), 100);
+      if (!this.timer) {
+        this.timer = setInterval(this.checkProximity.bind(this), 100);
+      }
     } else {
       if (this.timer) {
         clearInterval(this.timer);
@@ -335,10 +374,12 @@ class TriggerComponent extends BaseComponent {
     if (index > -1) {
       this.plugin.triggerComponents.splice(index, 1);
     }
+    console.log("[Trigger] onUnload: Removed object", this.objectID);
   }
 
   async onClick() {
     if ((this.getField('inputType') || "On-Click").trim().toLowerCase() === 'on-click') {
+      console.log("[Trigger] onClick: Triggering for object", this.objectID);
       await this.trigger();
     }
   }
@@ -348,10 +389,12 @@ class TriggerComponent extends BaseComponent {
     const proximityDistance = parseFloat(this.getField('proximityDistance')) || 2;
     const userPosition = await this.plugin.user.getPosition();
     const objPosition = { x: this.fields.x, y: this.fields.height, z: this.fields.y };
-    const distance = this.dist(objPosition.x, objPosition.y, objPosition.z, userPosition.x, userPosition.y, userPosition.z);
+    const distance = this.dist(objPosition.x, objPosition.y, objPosition.z,
+                               userPosition.x, userPosition.y, userPosition.z);
     if (inputType === 'proximity') {
       if (distance <= proximityDistance) {
         if (!this.triggered) {
+          console.log("Trigger checkProximity: triggering on proximity (distance =", distance, ")");
           this.triggered = true;
           await this.trigger();
         }
@@ -369,7 +412,8 @@ class TriggerComponent extends BaseComponent {
         : 0;
       const required = parseInt(this.getField('requiredUserCount')) || 2;
       if (count >= required && !this.triggered) {
-        this.triggered = true,
+        console.log("Trigger checkProximity: triggering on multi-proximity (count =", count, ")");
+        this.triggered = true;
         await this.trigger();
       } else if (count < required) {
         this.triggered = false;
@@ -378,22 +422,38 @@ class TriggerComponent extends BaseComponent {
   }
 
   async trigger() {
-    const roleRestricted = this.getField('roleRestricted') === true || String(this.getField('roleRestricted')).toLowerCase() === "true";
+    const roleRestricted = this.getField('roleRestricted') === true ||
+                           String(this.getField('roleRestricted')).toLowerCase() === "true";
     const requiredRole = this.getField('requiredRole') || "";
     const assignRole = this.getField('assignRole') || "";
     const userRoles = this.plugin.getUserRoles(this.userID);
+    console.log("Trigger invoked: roleRestricted =", roleRestricted, 
+                "requiredRole =", requiredRole, 
+                "assignRole =", assignRole, 
+                "userRoles =", userRoles);
     if (roleRestricted && requiredRole) {
-      if (!this.plugin.isValidRole(requiredRole)) return;
-      if (userRoles.indexOf(requiredRole) === -1) return;
+      if (!this.plugin.isValidRole(requiredRole)) {
+        console.log("Trigger aborted: requiredRole is not valid.");
+        return;
+      }
+      if (userRoles.indexOf(requiredRole) === -1) {
+        console.log("Trigger aborted: user does not have required role.");
+        return;
+      }
     }
     if (assignRole) {
-      if (!this.plugin.isValidRole(assignRole)) return;
-      if (userRoles.indexOf(assignRole) === -1) {
-        this.plugin.assignUserRole(this.userID, assignRole);
+      if (this.plugin.isValidRole(assignRole)) {
+        if (userRoles.indexOf(assignRole) === -1) {
+          this.plugin.assignUserRole(this.userID, assignRole);
+          console.log("Trigger: assigned role", assignRole, "to user", this.userID);
+        }
+      } else {
+        console.log("Trigger: assignRole", assignRole, "is not valid.");
       }
     }
     const actionID = this.getField('actionID') || '';
     const isAdmin = await this.plugin.user.isAdmin();
+    console.log("Sending trigger message for actionID:", actionID);
     this.plugin.messages.send({
       action: 'trigger',
       actionID: actionID,
@@ -417,7 +477,7 @@ class TriggerComponent extends BaseComponent {
     return 0;
   }
 
-  async onMessage(msg) { };
+  async onMessage(msg) { }
 }
 
 /**
@@ -428,6 +488,7 @@ class ReceiverComponent extends BaseComponent {
     this.plugin.receiverComponents.push(this);
     this.userID = await this.plugin.user.getID();
     const props = await this.plugin.objects.get(this.objectID);
+    console.log("Receiver onLoad: props =", props);
     if (props && props.currentState) {
       this.currentState = props.currentState;
     }
@@ -435,19 +496,24 @@ class ReceiverComponent extends BaseComponent {
       this.currentDirection = props.currentDirection;
     }
     await this.readSettings();
+    // Removed forced default state for Reactive mode to keep live editor responsive.
     this.processingTransition = false;
     this.lastTriggerTime = 0;
   }
 
   async onSettingsUpdated() {
+    console.log("Receiver onSettingsUpdated called.");
     await this.readSettings();
   }
 
   async readSettings() {
     const animMode = (this.getField('animationMode') || 'Reactive').trim();
-    this.disableLocalAudio = this.getField('disableLocalAudio') === true || String(this.getField('disableLocalAudio')).toLowerCase() === "true";
+    console.log("Receiver readSettings: animationMode =", animMode);
+    this.disableLocalAudio = this.getField('disableLocalAudio') === true ||
+                             String(this.getField('disableLocalAudio')).toLowerCase() === "true";
     if (animMode === 'Transition') {
       this.transitionMode = (this.getField('transitionMode') || 'Cycle').trim();
+      console.log("Receiver readSettings: transitionMode =", this.transitionMode);
       if (this.transitionMode === 'Cycle') {
         let staticStatesStr = this.getField('staticStates');
         if (!staticStatesStr || staticStatesStr.trim().length === 0) {
@@ -482,6 +548,7 @@ class ReceiverComponent extends BaseComponent {
         try {
           this.mappingArray = JSON.parse(this.getField('transitionMapping') || '[]');
         } catch (e) {
+          console.log("Receiver readSettings: error parsing mappingArray", e);
           this.mappingArray = [];
         }
       }
@@ -493,18 +560,27 @@ class ReceiverComponent extends BaseComponent {
     if (index > -1) {
       this.plugin.receiverComponents.splice(index, 1);
     }
+    console.log("Receiver onUnload: Removed object", this.objectID);
   }
 
-  async onClick() { };
+  async onClick() { }
 
   async onMessage(msg) {
     if (msg.action === 'trigger' && msg.actionID === this.getField('actionID')) {
-      const roleRestricted = this.getField('roleRestricted') === true || String(this.getField('roleRestricted')).toLowerCase() === "true";
+      const roleRestricted = this.getField('roleRestricted') === true ||
+                             String(this.getField('roleRestricted')).toLowerCase() === "true";
       const requiredRole = this.getField('requiredRole') || "";
+      console.log("Receiver onMessage: roleRestricted =", roleRestricted, "requiredRole =", requiredRole);
       if (roleRestricted && requiredRole) {
-        if (!this.plugin.isValidRole(requiredRole)) return;
+        if (!this.plugin.isValidRole(requiredRole)) {
+          console.log("Receiver onMessage: requiredRole is not valid.");
+          return;
+        }
         const userRoles = this.plugin.getUserRoles(msg.userID);
-        if (userRoles.indexOf(requiredRole) === -1) return;
+        if (userRoles.indexOf(requiredRole) === -1) {
+          console.log("Receiver onMessage: user", msg.userID, "does not have required role.");
+          return;
+        }
       }
       this.handleTrigger();
     }
@@ -513,15 +589,23 @@ class ReceiverComponent extends BaseComponent {
   async handleTrigger() {
     const cooldown = parseFloat(this.getField('cooldown')) || 1;
     const now = Date.now();
-    if (now - this.lastTriggerTime < cooldown * 1000) return;
+    if (now - this.lastTriggerTime < cooldown * 1000) {
+      console.log("Receiver handleTrigger: cooldown in effect.");
+      return;
+    }
     this.lastTriggerTime = now;
-    if (this.processingTransition) return;
+    if (this.processingTransition) {
+      console.log("Receiver handleTrigger: already processing transition.");
+      return;
+    }
     this.processingTransition = true;
     const mode = (this.getField('animationMode') || 'Reactive').trim();
+    console.log("Receiver handleTrigger: mode =", mode);
     if (mode === 'Reactive') {
       await this.handleReactive();
     } else if (mode === 'Transition') {
       const transMode = (this.getField('transitionMode') || 'Cycle').trim();
+      console.log("Receiver handleTrigger: transition mode =", transMode);
       if (transMode === 'Cycle') {
         await this.handleTransitionCycle();
       } else {
@@ -540,7 +624,9 @@ class ReceiverComponent extends BaseComponent {
       if (anim && anim.duration) {
         return anim.duration * 1000;
       }
-    } catch (e) { };
+    } catch (e) {
+      console.log("Error in getAnimationDuration:", e);
+    }
     return 2000;
   }
 
@@ -548,6 +634,7 @@ class ReceiverComponent extends BaseComponent {
     const reactiveAnimation = this.getField('reactiveAnimation');
     const defaultAnimation = this.getField('defaultAnimation');
     const duration = await this.getAnimationDuration(reactiveAnimation);
+    console.log("Receiver handleReactive: reactiveAnimation =", reactiveAnimation, "defaultAnimation =", defaultAnimation, "duration =", duration);
     await this.plugin.objects.update(this.objectID, {
       animation: [{ name: reactiveAnimation }],
       currentState: reactiveAnimation,
@@ -571,7 +658,7 @@ class ReceiverComponent extends BaseComponent {
         dateModified: Date.now()
       }, false);
       setTimeout(() => {
-        this.processingTransition = false
+        this.processingTransition = false;
       }, (parseFloat(this.getField('cooldown')) || 1) * 1000);
     }, duration);
   }
@@ -583,6 +670,7 @@ class ReceiverComponent extends BaseComponent {
       this.currentIndex = 0;
       this.currentState = this.staticStates[0];
       this.currentDirection = 1;
+      console.log("Receiver handleTransitionCycle: using default staticStates");
     }
     if (this.currentIndex >= this.staticStates.length - 1) {
       this.currentDirection = -1;
@@ -612,6 +700,7 @@ class ReceiverComponent extends BaseComponent {
             currentState: this.staticStates[nextIndex],
             dateModified: Date.now()
           }, false);
+          console.log("Receiver handleTransitionCycle: Switched to state", this.staticStates[nextIndex]);
           this.currentIndex = nextIndex;
           this.currentState = this.staticStates[this.currentIndex];
           this.plugin.objects.update(this.objectID, { currentState: this.currentState, currentDirection: this.currentDirection, dateModified: Date.now() }, false);
@@ -643,6 +732,7 @@ class ReceiverComponent extends BaseComponent {
             currentState: this.staticStates[nextIndex],
             dateModified: Date.now()
           }, false);
+          console.log("Receiver handleTransitionCycle: Switched to state", this.staticStates[nextIndex]);
           this.currentIndex = nextIndex;
           this.currentState = this.staticStates[this.currentIndex];
           this.plugin.objects.update(this.objectID, { currentState: this.currentState, currentDirection: this.currentDirection, dateModified: Date.now() }, false);
@@ -695,6 +785,7 @@ class ReceiverComponent extends BaseComponent {
           currentState: mapping.to,
           dateModified: Date.now()
         }, false);
+        console.log("Receiver handleTransitionMapping: Transitioned to", mapping.to);
         this.currentState = mapping.to;
         this.processingTransition = false;
       }, duration);
@@ -735,6 +826,7 @@ class ReceiverComponent extends BaseComponent {
           currentState: mapping.from,
           dateModified: Date.now()
         }, false);
+        console.log("Receiver handleTransitionMapping: Reverse transitioned to", mapping.from);
         this.currentState = mapping.from;
         this.processingTransition = false;
       }, duration);
@@ -749,7 +841,8 @@ class ReceiverComponent extends BaseComponent {
     if (soundFile && soundFile.trim().length > 0) {
       this.audioID = await this.plugin.audio.play(
         this.plugin.paths.absolute(soundFile),
-        { volume: volume, x: this.fields.x, y: this.fields.y, height: this.fields.height });
+        { volume: volume, x: this.fields.x, y: this.fields.y, height: this.fields.height }
+      );
       this.plugin.messages.send({
         action: 'relaySound',
         sourceID: this.objectID,
@@ -769,7 +862,7 @@ class ReceiverComponent extends BaseComponent {
       this.audioID = await this.plugin.audio.play(
         this.plugin.paths.absolute(soundFile),
         { volume: volume, x: this.fields.x, y: this.fields.y, height: this.fields.height }
-      )
+      );
       setTimeout(() => {
         this.plugin.audio.stop(this.audioID);
       }, duration);
