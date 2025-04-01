@@ -209,6 +209,7 @@ export default class AssetLink extends BasePlugin {
           help: 'If checked, only triggers from users with the required role will be processed.', default: false },
         { id: 'requiredRole', name: 'Required Role', type: 'input',
           help: 'Enter the role required to interact with this receiver (must be a valid role).' },
+        // Animation Mode moved to Receiver Settings.
         { id: 'animationMode', name: 'Animation Mode', type: 'select',
           help: 'Reactive: one-off animation; Transition: cycle or mapping transitions.',
           values: ['Reactive', 'Transition'], default: 'Reactive' },
@@ -333,7 +334,12 @@ class TriggerComponent extends BaseComponent {
     if (this.currentInputType === 'proximity' || this.currentInputType === 'multi-proximity') {
       this.timer = setInterval(this.checkProximity.bind(this), 100);
     }
-    // The Vatom framework should call onSettingsUpdated automatically when settings change.
+    // Rely on the Vatom framework's onObjectUpdated to catch live editor changes.
+  }
+
+  async onObjectUpdated(newFields) {
+    console.log("Trigger onObjectUpdated called with newFields:", newFields);
+    await this.onSettingsUpdated();
   }
 
   async onSettingsUpdated() {
@@ -366,10 +372,7 @@ class TriggerComponent extends BaseComponent {
       clearInterval(this.timer);
       this.timer = null;
     }
-    if (this.inputTypeChecker) {
-      clearInterval(this.inputTypeChecker);
-      this.inputTypeChecker = null;
-    }
+    // No manual polling timer here since onObjectUpdated is used.
     const index = this.plugin.triggerComponents.indexOf(this);
     if (index > -1) {
       this.plugin.triggerComponents.splice(index, 1);
@@ -496,7 +499,12 @@ class ReceiverComponent extends BaseComponent {
       this.currentDirection = props.currentDirection;
     }
     await this.readSettings();
-    // Removed forced default state for Reactive mode to keep live editor responsive.
+    // For Reactive mode, if no currentState is set, force defaultAnimation.
+    if ((this.getField('animationMode') || 'Reactive').trim() === 'Reactive' && !this.currentState) {
+      this.currentState = this.getField('defaultAnimation');
+      console.log("Receiver onLoad: Reactive mode default state set to", this.currentState);
+      this.plugin.objects.update(this.objectID, { currentState: this.currentState, dateModified: Date.now() }, false);
+    }
     this.processingTransition = false;
     this.lastTriggerTime = 0;
   }
@@ -841,8 +849,7 @@ class ReceiverComponent extends BaseComponent {
     if (soundFile && soundFile.trim().length > 0) {
       this.audioID = await this.plugin.audio.play(
         this.plugin.paths.absolute(soundFile),
-        { volume: volume, x: this.fields.x, y: this.fields.y, height: this.fields.height }
-      );
+        { volume: volume, x: this.fields.x, y: this.fields.y, height: this.fields.height });
       this.plugin.messages.send({
         action: 'relaySound',
         sourceID: this.objectID,
@@ -903,7 +910,7 @@ class AssetLinkSecondaryAudioOutput extends BaseComponent {
         height: this.fields.height
       });
       setTimeout(() => {
-        this.plugin.audio.stop(this.audioID)
+        this.plugin.audio.stop(this.audioID);
       }, duration);
     }
   }
